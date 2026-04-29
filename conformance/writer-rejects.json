@@ -1,0 +1,51 @@
+[
+  {
+    "id": "integer/exceeds-uint64",
+    "description": "Integer-valued JSON token 18446744073709551616 (= 2^64) exceeds the encoder's range [-2^63, 2^64-1]. Writers MUST reject and MUST NOT downcast to Float64.",
+    "spec_refs": ["§5.2", "§11.2"],
+    "json_text": "18446744073709551616",
+    "writer_must_reject": true,
+    "reject_reason": "Integer-valued number above 2^64 - 1; MUST be rejected, not downcast to Float64 (§5.2)."
+  },
+  {
+    "id": "integer/below-int64-min",
+    "description": "Integer-valued JSON token -9223372036854775809 (= -(2^63) - 1) is below the encoder's lower bound -2^63. Writers MUST reject.",
+    "spec_refs": ["§5.2", "§11.2"],
+    "json_text": "-9223372036854775809",
+    "writer_must_reject": true,
+    "reject_reason": "Integer-valued number below -2^63; MUST be rejected, not downcast to Float64 (§5.2)."
+  },
+  {
+    "id": "float/infinity",
+    "description": "Numeric token 1e400 overflows binary64 to +Infinity. JSON has no Infinity literal; writers MUST reject inputs that parse to ±Infinity.",
+    "spec_refs": ["§5.3", "§11.2"],
+    "json_text": "1e400",
+    "writer_must_reject": true,
+    "reject_reason": "Token parses to Infinity (§5.3): writers MUST NOT produce NaN/Infinity and MUST reject inputs that overflow."
+  },
+  {
+    "id": "float/non-roundtrip-decimal",
+    "description": "Token 1.0000000000000001 needs more significant decimal digits than binary64 represents losslessly: the binary64 parse v differs bit-for-bit from a higher-precision parse v' narrowed to binary64.",
+    "spec_refs": ["§5.3", "§11.2"],
+    "json_text": "1.0000000000000001",
+    "writer_must_reject": true,
+    "reject_reason": "Significant decimal digits exceed binary64 precision (§5.3 precision-limit rule)."
+  },
+  {
+    "id": "object/duplicate-keys-input",
+    "description": "Input JSON object literal contains the key \"a\" twice. Writers MUST reject across all runs of an object (whether in the same leaf buffer or across already-flushed runs).",
+    "spec_refs": ["§7.3", "§8 invariant 5", "§11.2"],
+    "json_text": "{\"a\": 1, \"a\": 2}",
+    "writer_must_reject": true,
+    "reject_reason": "Duplicate key in a single object — writers MUST enforce global uniqueness across runs (§11.2)."
+  },
+  {
+    "id": "string/invalid-utf8",
+    "description": "Input contains a string whose bytes are not valid UTF-8 (e.g., a lone continuation byte 0xC0 0xC0 inside a string). The bad bytes cannot be expressed as a valid JSON literal, so json_text is null; raw_input_hex shows the JSON string token's bytes that the writer must reject.",
+    "spec_refs": ["§5.4", "§11.2"],
+    "json_text": null,
+    "raw_input_hex": "22 C0 C0 22",
+    "writer_must_reject": true,
+    "reject_reason": "Input string is not valid UTF-8 (§5.4: data MUST be valid UTF-8; §11.2 lists invalid UTF-8 as MUST reject)."
+  }
+]

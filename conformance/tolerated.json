@@ -37,7 +37,7 @@
     "writer_compliant": false,
     "reader_should_accept": true,
     "minimal_form_id": "container/array-singleton",
-    "bytes_hex": "4B41484E 0100 14 71 01 0600 0800000000000000 4B41484E"
+    "bytes_hex": "4B41484E 0100 14 71 01 0600 0700000000000000 4B41484E"
   },
   {
     "id": "tolerated/extension-c0-opaque",

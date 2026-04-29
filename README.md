@@ -11,8 +11,7 @@ See [spec.md](./spec.md) for the format specification.
 ## Conformance Vectors
 
 Lives in `./conformance/*.json`. Each vector pairs a JSON input or constructed file with the exact bytes a
-conforming implementation must produce or reject. Vectors live in four
-manifests:
+conforming implementation must produce or reject.
 
 ### Manifest schema
 

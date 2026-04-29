@@ -1,6 +1,6 @@
 # Kahon Binary Format Specification
 
-**Version**: 0.1.0-draft
+**Version**: 0.1.1-draft
 **Date**: 2026-04-24
 **Status**: Draft
 **Author**: Jan Karlo Dela Cruz
@@ -434,21 +434,32 @@ independently sorted run; ranges across runs MAY overlap.
 node:
 
 ```
-for (sub_total, key_off_lo, key_off_hi, node_off) in node:    # in order
+result = not_found
+for (sub_total, key_off_lo, key_off_hi, node_off) in node:    # oldest first
     if k < deref(key_off_lo) or k > deref(key_off_hi):
-        skip                                  # MAY: fence excludes k
-    else:
-        search(read_node(node_off))           # MUST: recurse
+        continue                              # MAY: fence excludes k
+    hit = search(read_node(node_off))
+    if hit is found:
+        result = hit                          # last-wins: keep overwriting
+return result                                 # equivalently: walk reversed
+                                              # and return first hit
 ```
 
 Comparisons use UTF-8 byte order. Non-overlapping runs give logarithmic
 lookup; overlap costs scale with the number of children whose ranges cover
 `k`.
 
-**Each key appears exactly once** within a logical object. Writers MUST
-enforce this across all runs. Readers MAY return the first match without
-verifying uniqueness, but MUST reject if a single lookup observes two
-matches.
+**Last-flushed-wins on duplicates.** A key MAY appear in more than one run
+within the same logical object; sibling fence ranges MAY overlap. When a
+lookup finds matches in multiple runs, the value from the **most recently
+flushed** (last in flush-time order) run is the result. Earlier matches are
+shadowed. Readers SHOULD iterate children in reverse flush order and return
+the first match, or iterate forward and return the last; both yield the
+same value.
+
+Within a single leaf, keys are strictly sorted and unique by construction
+(§7.3) — a duplicate inside one leaf is a structural error, not a
+last-wins case.
 
 ### 7.5 Worked example
 
@@ -508,11 +519,12 @@ Conforming files MUST satisfy, and readers MUST verify as they traverse:
    container is stored as a leaf, not wrapped.
 4. **Object leaf ordering and uniqueness.** `keys[i] < keys[i+1]` by raw
    UTF-8 bytes; no key repeats within a leaf.
-5. **Object global uniqueness.** Within a logical object (one object-leaf, or
-   the full subtree under an object-internal), a key MUST NOT appear in more
-   than one leaf. Writers MUST enforce at write time. Readers MAY return the
-   first match without checking, but MUST reject if a single lookup observes
-   two matches.
+5. **Object cross-run duplicates: last-wins.** Within a logical object, the
+   same key MAY appear in more than one run (one match per run, since
+   leaves are themselves duplicate-free per invariant 4). When a lookup
+   observes multiple matches, the match from the most recently flushed run
+   is authoritative; earlier matches are shadowed. Readers MUST resolve in
+   flush-time order and MUST NOT reject on multiple matches alone.
 6. **Object internal fence consistency.** Each child's `key_off_lo` and
    `key_off_hi` MUST be `≤` and `≥` (UTF-8 byte order) every key in the
    child's subtree. Children stay in flush-time order, oldest first; sibling
@@ -596,7 +608,7 @@ magic mismatches or `root_offset` is out of range.
 | **Decoding**   | Truncated or overlong varuint                | MUST reject |
 | **Object**     | Leaf keys not strictly UTF-8-sorted          | MUST reject |
 | **Object**     | Duplicate key in a leaf                      | MUST reject |
-| **Object**     | Two matches in a single key lookup           | MUST reject |
+| **Object**     | Multiple matches across runs in a key lookup | accept; resolve last-flushed-wins (§7.4) |
 | **Object**     | Observed key violates a child's fence        | MUST reject (at the observing lookup) |
 | **Container**  | Internal node with `m < 2`                   | MUST reject |
 | **Container**  | `total ≠ Σ sub_total` (internal node)        | SHOULD reject (advisory, §8) |
@@ -612,12 +624,19 @@ magic mismatches or `root_offset` is out of range.
 ### 11.2 Writer Errors
 
 Writers MUST reject:
-- duplicate keys in any single object (same leaf or across runs);
 - invalid UTF-8;
 - NaN or Infinity floats;
 - integer-valued numbers outside `[-2^63, 2^64-1]`;
 - non-integer tokens whose significant digits exceed binary64 (§5.3);
 - structurally invalid input (e.g., unbalanced containers).
+
+When input JSON contains the same key more than once in a single object,
+writers SHOULD apply **last-wins** semantics: the latest occurrence's value
+is encoded. Within a single buffered leaf this means overwriting an earlier
+pair; across already-flushed runs, the writer MAY either rewrite (if the
+earlier run is still mutable) or simply append a new run — readers resolve
+the duplicate by flush order (§7.4). Writers MAY instead reject duplicate
+input keys; either behavior is conforming.
 
 Writers MUST also honor minimal encodings:
 
@@ -732,8 +751,10 @@ cascade one entry up. On close, unwind bottom-up; the last remaining entry's
 
 Arrays are textbook bulk-loaded B+trees, unsorted. Objects carry key bytes
 beside offsets at level 0; before each leaf flush, the buffer is sorted and
-any duplicate (within the buffer or against earlier flushed runs of the same
-object) is a writer error. After sorting, the leaf's smallest/largest
+any duplicate **within the buffer** is collapsed to its last occurrence
+(last-wins, §11.2) — duplicates against already-flushed runs need no
+special handling, since readers resolve them by flush order. After sorting,
+the leaf's smallest/largest
 `key_off`s become its fence and bubble up with `(sub_total, node_off)` -
 upper levels merge children's fences (min of `key_off_lo`s, max of
 `key_off_hi`s by UTF-8) and stay flush-time ordered.

@@ -32,14 +32,6 @@
     "reject_reason": "Significant decimal digits exceed binary64 precision (§5.3 precision-limit rule)."
   },
   {
-    "id": "object/duplicate-keys-input",
-    "description": "Input JSON object literal contains the key \"a\" twice. Writers MUST reject across all runs of an object (whether in the same leaf buffer or across already-flushed runs).",
-    "spec_refs": ["§7.3", "§8 invariant 5", "§11.2"],
-    "json_text": "{\"a\": 1, \"a\": 2}",
-    "writer_must_reject": true,
-    "reject_reason": "Duplicate key in a single object — writers MUST enforce global uniqueness across runs (§11.2)."
-  },
-  {
     "id": "string/invalid-utf8",
     "description": "Input contains a string whose bytes are not valid UTF-8 (e.g., a lone continuation byte 0xC0 0xC0 inside a string). The bad bytes cannot be expressed as a valid JSON literal, so json_text is null; raw_input_hex shows the JSON string token's bytes that the writer must reject.",
     "spec_refs": ["§5.4", "§11.2"],

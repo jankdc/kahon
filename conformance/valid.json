@@ -214,6 +214,13 @@
     "bytes_hex": "4B41484E 0100 60 61 14 80 01 06 08 0900000000000000 4B41484E"
   },
   {
+    "id": "object/duplicate-input-last-wins",
+    "description": "Input {\"a\":1,\"a\":2} resolves last-wins (§11.2): writer encodes only the latest occurrence, byte-equivalent to {\"a\":2}. Writers MAY also reject duplicate input keys; either is conforming. This vector pins the last-wins encoding.",
+    "spec_refs": ["§7.4", "§8 invariant 5", "§11.2"],
+    "json_text": "{\"a\": 1, \"a\": 2}",
+    "bytes_hex": "4B41484E 0100 60 61 15 80 01 06 08 0900000000000000 4B41484E"
+  },
+  {
     "id": "container/object-two-sorted",
     "description": "Object {\"a\":1, \"b\":2} as a 2-pair leaf. Keys are strictly sorted by UTF-8 bytes.",
     "spec_refs": ["§4", "§7.3", "§8"],

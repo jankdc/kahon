@@ -1,7 +1,7 @@
 # Kahon Binary Format Specification
 
-**Version**: 0.1.1-draft
-**Date**: 2026-04-24
+**Version**: 0.2.0-draft
+**Date**: 2026-05-08
 **Status**: Draft
 **Author**: Jan Karlo Dela Cruz
 
@@ -17,11 +17,12 @@
 6. [VarInt Encoding](#6-varint-encoding)
 7. [Container Encoding](#7-container-encoding)
 8. [Container Tree Invariants](#8-container-tree-invariants)
-9. [Body and Postorder Layout](#9-body-and-postorder-layout)
-10. [Header and Trailer](#10-header-and-trailer)
-11. [Error Handling](#11-error-handling)
-12. [Disk Storage Recommendations](#12-disk-storage-recommendations)
-13. [Appendix](#13-appendix)
+9. [Sum Encoding](#9-sum-encoding)
+10. [Body and Postorder Layout](#10-body-and-postorder-layout)
+11. [Header and Trailer](#11-header-and-trailer)
+12. [Error Handling](#12-error-handling)
+13. [Disk Storage Recommendations](#13-disk-storage-recommendations)
+14. [Appendix](#14-appendix)
 
 ---
 
@@ -88,6 +89,11 @@ padding is imposed.
 
 "MUST", "MUST NOT", "SHALL", "SHOULD", "MAY" are per RFC 2119.
 
+**Overlong**: a malformed encoding.
+
+**Non-minimal**: a well-formed encoding that decodes correctly but isn't
+the smallest form the spec requires writers to use. Readers accept it.
+
 ---
 
 ## 3. File Layout
@@ -97,7 +103,7 @@ A Kahon file is a fixed header, a postorder body, and a fixed trailer.
 ```
 +------------------------------------------+
 | magic  "KAHN"                  (4 bytes) |
-| version = 0x01                 (1 byte ) |
+| version = 0x02                 (1 byte ) |
 | flags   = 0x00                 (1 byte ) |   reserved, MUST be zero
 +------------------------------------------+
 | body: values in postorder      (N bytes) |
@@ -109,8 +115,9 @@ A Kahon file is a fixed header, a postorder body, and a fixed trailer.
 
 Fixed overhead is **18 bytes**. `root_offset` is the absolute byte offset of
 the root value's type code. The root is always the last value in the body;
-writers MUST set `root_offset` to its type-code byte. Readers MUST verify
-both magic values and the version byte before trusting any other field.
+writers MUST set `root_offset` to its type-code byte. Readers SHOULD verify
+both magic values and the version byte before trusting any other field;
+on a mismatch they MUST reject (§12.1).
 
 ---
 
@@ -143,8 +150,9 @@ point at the type-code byte.
 | `0x70..0x73`   | Array leaf       | `varuint n` + `n × uintW` child offsets (width code `w = code − 0x70`)               | -                              |
 | `0x74..0x77`   | Array internal   | `varuint total` + `varuint m` + `m × (uint64_le sub_total, uintW node_off)`          | -                              |
 | `0x80..0x83`   | Object leaf      | `varuint n` + `n × (uintW key_off, uintW val_off)` (width code `w = code − 0x80`)    | -                              |
-| `0x84..0x87`   | Object internal  | `varuint total` + `varuint m` + `m × (uint64_le sub_total, uintW key_off_lo, uintW key_off_hi, uintW node_off)` | -                              |
-| `0xC0..0xFF`   | Extension        | `varuint len` + `len` payload bytes; reserved for future versions                    | -                              |
+| `0x84..0x87`   | Object internal  | `varuint total` + `varuint m` + `m × (uint64_le sub_total, uintW key_off_lo, uintW key_off_hi, uintW node_off)` | -   |
+| `0xC0..0xCF`   | TinySum          | -; index `= code − 0xC0` (0..15); payload value follows immediately                  | `C3 14` (sum 3 of `1`)         |
+| `0xD0`         | Sum              | `varuint index` + payload value                                                      | `D0 10 14` (sum 16 of `1`)     |
 
 The low 2 bits of every container type code encode an **offset width** `w`
 applied to all offsets in the node's payload:
@@ -161,19 +169,10 @@ we write `uintW`. All offset fields in a node use this width - `off[i]`,
 `key_off`/`val_off`, `node_off`, `key_off_lo`/`key_off_hi`. `sub_total` stays
 `uint64_le`.
 
-**Extension** codes `0xC0..0xFF` are reserved for future versions. Writers
-MUST NOT emit them; readers SHOULD treat them as opaque (the length prefix
-lets readers skip or surface the value without interpreting it).
-
-The gaps `0x35..0x3F`, `0x48..0x4F`, `0x52..0x5F`, `0x88..0xBF` are reserved
-with no defined structure. They MUST NOT appear in conforming files; readers
-MUST reject them.
-
-A JSON array maps to an array-leaf (`0x70..0x73`), array-internal
-(`0x74..0x77`), or `EmptyArray` (`0x33`); a JSON object maps to object-leaf
-(`0x80..0x83`), object-internal (`0x84..0x87`), or `EmptyObject` (`0x34`).
-"`0x7x` leaf" denotes any of `0x70..0x73`; same shorthand for the other three
-families.
+The gaps are reserved with no defined structure. Writers MUST NOT emit them. If a
+reader observes a reserved byte as a value type-code during decoding, it
+MUST reject (§12.1); whether to look for them otherwise is up to the
+reader (§8).
 
 ---
 
@@ -306,7 +305,7 @@ node's type code (§4): `uintW` is `W = 2^w` little-endian bytes,
 
 Writers MUST pick the **smallest** `W` such that
 `max(offset_in_node) < 2^(8W)`. Larger-than-necessary widths are
-non-conforming, but readers SHOULD accept them (mirroring §11.1 scalar
+non-conforming, but readers SHOULD accept them (mirroring §12.1 scalar
 widths). Offsets that don't fit the declared width are unrepresentable, so
 rejection is implicit.
 
@@ -314,7 +313,7 @@ rejection is implicit.
 
 Zero-length array -> `0x33` (`EmptyArray`); zero-length object -> `0x34`
 (`EmptyObject`). Writers MUST use these singletons and MUST NOT emit an
-`n = 0` leaf; readers SHOULD accept an `n = 0` leaf anyway (§11.1).
+`n = 0` leaf; readers SHOULD accept an `n = 0` leaf anyway (§12.1).
 
 Empty containers carry no offsets, so no width code applies. They may appear
 anywhere a value is expected.
@@ -396,7 +395,8 @@ Expanding the pairs into their two cells each:
   `key_off`.
 
 Keys within a leaf MUST be **strictly sorted by UTF-8 byte order** and unique.
-Writers MUST enforce; readers MUST reject violations.
+Writers MUST enforce; readers MAY validate (§8), and MUST reject any
+violation they observe (§12.1).
 
 ### 7.4 Object internal (`0x84`..`0x87`)
 
@@ -458,7 +458,7 @@ the first match, or iterate forward and return the last; both yield the
 same value.
 
 Within a single leaf, keys are strictly sorted and unique by construction
-(§7.3) — a duplicate inside one leaf is a structural error, not a
+(§7.3) - a duplicate inside one leaf is a structural error, not a
 last-wins case.
 
 ### 7.5 Worked example
@@ -467,7 +467,7 @@ The JSON document `{"a": [1, 2.0, "x"]}` encodes as:
 
 ```
 # header, offset 0..5
-magic "KAHN" ver 01 flags 00
+magic "KAHN" ver 02 flags 00
 
 # body
 @06: 0x60 0x61                                         # TinyString "a"
@@ -508,13 +508,21 @@ Bytes at each offset:
 
 ## 8. Container Tree Invariants
 
-Conforming files MUST satisfy, and readers MUST verify as they traverse:
+Conforming files MUST satisfy the following. Validation is the reader's
+prerogative - readers MAY skip checks entirely (e.g., when the input is
+trusted). When a reader **does** observe a violation, the response is governed
+by §12.1 (MUST/SHOULD reject per row). Per-row deviations from outright
+rejection (advisory metadata, last-wins resolution) are noted inline:
 
 1. **Type consistency.** JSON arrays use `0x70..0x77` or `0x33`; JSON objects
    use `0x80..0x87` or `0x34`. Pointers via array-child or object-value slots
-   MAY land on any value tag.
-2. **Internal node totals.** `total = Σ sub_total`. Each `sub_total` equals
-   the referenced child's `n` (leaf) or `total` (internal).
+   MAY land on any value tag, including a sum wrapper (`0xC0..0xD0`, §9);
+   the wrapped payload determines the JSON shape.
+2. **Internal node totals (advisory).** `total = Σ sub_total`, and each
+   `sub_total` equals the referenced child's `n` (leaf) or `total`
+   (internal). These counts are traversal metadata: writers MUST emit them
+   correctly (§12.2), but readers SHOULD reject on mismatch and MAY
+   proceed if the violation doesn't affect the current lookup.
 3. **Minimum fanout.** `m ≥ 2` for every internal node. A single-node
    container is stored as a leaf, not wrapped.
 4. **Object leaf ordering and uniqueness.** `keys[i] < keys[i+1]` by raw
@@ -534,16 +542,53 @@ Conforming files MUST satisfy, and readers MUST verify as they traverse:
    children first), and land on a valid type-code byte. Readers MUST reject
    otherwise.
 8. **Offset width sufficiency.** Declared `W` MUST hold every offset in the
-   node. Writers MUST pick the smallest `W` that fits; readers MUST accept
-   any `W` that fits.
+   node. Writers MUST pick the smallest `W` that fits; readers SHOULD accept
+   any `W` that fits (§12.1).
 
-For invariants 2 and 3, readers SHOULD reject but MAY proceed if the
-violation doesn't affect the current lookup - these are advisory traversal
-metadata; bit-flip detection is out of scope (§1).
+Invariant 3 (`m ≥ 2`) is a structural rule and remains MUST reject (§12.1).
 
 ---
 
-## 9. Body and Postorder Layout
+## 9. Sum Encoding
+
+A **sum** is a tagged single-value wrapper for schema-aware tagged unions.
+The wire form is a type code, an optional varuint index, then exactly one
+payload value. Sums are transparent to JSON shape; schema-blind readers
+MAY drop the index and surface the payload directly.
+
+Two encodings. For indices `0..15`, writers MUST use **TinySum**
+(`0xC0..0xCF`), with the index in the low nibble of the tag:
+
+```
++---------------+-----------------+
+| 0xC0 + index  | payload value   |
++---------------+-----------------+
+  1 byte           variable
+```
+
+For indices `≥ 16`, writers MUST use the **generic** form:
+
+```
++------+---------+-----------------+
+| 0xD0 | index   | payload value   |
++------+---------+-----------------+
+  1 byte  varuint   variable
+```
+
+- **index**: sum discriminator, `varuint` (§6), encoded minimally.
+- **payload**: any kahon value at the next byte; no padding or separator.
+  Cases with no payload encode `Null` (`0x00`).
+
+The sum header is written in postorder immediately before the payload's
+type-code byte: if the sum tag is at offset `V` and the index occupies
+`E` bytes (`E = 0` for TinySum), the payload's type-code byte is at
+`V + 1 + E`. Container slots referencing a sum point at the tag.
+Sums do not deduplicate; emitting the same payload under two indices
+writes the bytes twice.
+
+---
+
+## 10. Body and Postorder Layout
 
 The body is written in **postorder**: each child is fully written before its
 referencing container. Consequences:
@@ -561,9 +606,9 @@ from the root rather than scanning.
 
 ---
 
-## 10. Header and Trailer
+## 11. Header and Trailer
 
-### 10.1 Header
+### 11.1 Header
 
 The header is exactly **6 bytes** at the start of the file:
 
@@ -571,14 +616,14 @@ The header is exactly **6 bytes** at the start of the file:
 Offset  Size   Field     Description
 ------  ----   -----     -----------
  0       4     magic     ASCII "KAHN" (0x4B 0x41 0x48 0x4E)
- 4       1     version   Format version (uint8), currently 0x01
+ 4       1     version   Format version (uint8), currently 0x02
  5       1     flags     Reserved, MUST be 0x00
 ```
 
 Readers MUST reject on magic mismatch, unsupported version, or any flag bit
 set.
 
-### 10.2 Trailer
+### 11.2 Trailer
 
 The trailer is exactly **12 bytes** at the end of the file:
 
@@ -593,9 +638,9 @@ magic mismatches or `root_offset` is out of range.
 
 ---
 
-## 11. Error Handling
+## 12. Error Handling
 
-### 11.1 Reader Errors
+### 12.1 Reader Errors
 
 | Phase | Condition | Behavior |
 |---|---|---|
@@ -618,10 +663,11 @@ magic mismatches or `root_offset` is out of range.
 | **Lookup**     | Non-minimal string encoding                  | SHOULD accept |
 | **Lookup**     | `n = 0` leaf instead of singleton            | SHOULD accept |
 | **Lookup**     | Non-minimal offset width                     | SHOULD accept (writer-only rule) |
+| **Lookup**     | Non-minimal sum index encoding               | SHOULD accept (writer-only rule) |
 | **Lookup**     | Array index out of bounds                    | not-found or error (impl-defined) |
 | **Lookup**     | Key not found                                | not-found or error (impl-defined) |
 
-### 11.2 Writer Errors
+### 12.2 Writer Errors
 
 Writers MUST reject:
 - invalid UTF-8;
@@ -630,46 +676,56 @@ Writers MUST reject:
 - non-integer tokens whose significant digits exceed binary64 (§5.3);
 - structurally invalid input (e.g., unbalanced containers).
 
+Writers MUST also produce conforming directory structure:
+- every internal node has `m ≥ 2` (a single-child directory collapses to a
+  leaf, §8 invariant 3);
+- each object-internal child's `key_off_lo`/`key_off_hi` bound every key
+  in its subtree by UTF-8 byte order (§8 invariant 6);
+- internal-node `total = Σ sub_total`, with each `sub_total` matching the
+  child's `n` (leaf) or `total` (internal) (§8 invariant 2).
+
 When input JSON contains the same key more than once in a single object,
 writers SHOULD apply **last-wins** semantics: the latest occurrence's value
 is encoded. Within a single buffered leaf this means overwriting an earlier
 pair; across already-flushed runs, the writer MAY either rewrite (if the
-earlier run is still mutable) or simply append a new run — readers resolve
+earlier run is still mutable) or simply append a new run - readers resolve
 the duplicate by flush order (§7.4). Writers MAY instead reject duplicate
 input keys; either behavior is conforming.
 
 Writers MUST also honor minimal encodings:
 
-| Range/case                  | Form                       | Section |
-|-----------------------------|----------------------------|---------|
-| integers `[-16, 31]`        | `TinyNegInt` / `TinyUInt`  | §5.2    |
-| string bytes `1..15`        | `TinyString`               | §5.4    |
-| zero-length array/object    | `EmptyArray` / `EmptyObject` | §7.0  |
-| container offset width      | smallest `W` that fits     | §7      |
+| Range/case                  | Form                         | Section |
+|-----------------------------|------------------------------|---------|
+| integers `[-16, 31]`        | `TinyNegInt` / `TinyUInt`    | §5.2    |
+| string bytes `1..15`        | `TinyString`                 | §5.4    |
+| sum index `0..15`           | `TinySum`                    | §9      |
+| zero-length array/object    | `EmptyArray` / `EmptyObject` | §7.0    |
+| container offset width      | smallest `W` that fits       | §7      |
 
-Violators are non-conforming; readers SHOULD still accept the output (§11.1).
+Violators are non-conforming; readers SHOULD still accept the output (§12.1).
 
 ---
 
-## 12. Disk Storage Recommendations
+## 13. Disk Storage Recommendations
 
 **Non-normative**: optional writer practices that improve page-cache
 behavior on disk or in object storage. Files following this guidance remain
-conforming under §1–§11; readers need no changes.
+conforming under §1–§12; readers need no changes.
 
-### 12.1 Background: why default layout is suboptimal on disk
+### 13.1 Background: why default layout is suboptimal on disk
 
 Resolving `foo.bar[3].baz` is a chain of pointer chases from `root_offset`.
 In memory each hop is free; on disk each cross-page hop may fault. Two
 defaults amplify this:
 
 - **Variable, small nodes.** Fanout caps entries, but on-disk size ranges
-  ~130 B (array leaf, `W=1`) to ~2 KB (object internal, `W=8`). Neither
-  aligns to a 4 KB page; small nodes underfill pages.
+  ~130 B (array leaf, 1-byte slots, `w=0`) to ~2 KB (object internal,
+  8-byte slots, `w=3`). Neither aligns to a 4 KB page; small nodes
+  underfill pages.
 - **Cold trailer + cold root.** Bootstrap touches two pages: the 12-byte
   trailer at `file_size − 12`, then the root node hundreds of bytes earlier.
 
-### 12.2 Page-aligned trailer region
+### 13.2 Page-aligned trailer region
 
 Writers SHOULD pad the body so the trailer lies in the file's last 4 KB
 page - i.e., `file_size ≡ 0 (mod 4096)`. Padding uses unreferenced scalars
@@ -684,27 +740,27 @@ a second I/O.
 Pad only when trailing-page savings exceed padding cost (files larger than a
 few pages). Below 4 KB, padding wastes more than it saves.
 
-### 12.3 Target node size
+### 13.3 Target node size
 
 Writers SHOULD pick fanouts so each node is close to but doesn't exceed a
 **target byte size** (recommended: 4096, matching a common OS page). This
 replaces a fixed `fanout` knob with a size-driven policy.
 
-### 12.4 Avoid splitting nodes across page boundaries
+### 13.4 Avoid splitting nodes across page boundaries
 
 When a node ≤ 4 KB would straddle a 4 KB boundary, writers SHOULD pad
-(filler as in §12.2) to push it to the next boundary. Nodes > 4 KB are
+(filler as in §13.2) to push it to the next boundary. Nodes > 4 KB are
 emitted unaligned; two pages is unavoidable.
 
-A cheap follow-on to §12.3: once nodes are page-sized, alignment turns "one
+A cheap follow-on to §13.3: once nodes are page-sized, alignment turns "one
 fault per hop" from near-miss to guarantee. Padding cost is bounded by
 `4 KB × (#internal nodes)` - small for target-sized nodes.
 
 ---
 
-## 13. Appendix
+## 14. Appendix
 
-### 13.1 Complexity
+### 14.1 Complexity
 
 Let `B` = fanout, `n` = container element count, `d` = JSON depth.
 
@@ -741,7 +797,7 @@ single sorted run); at most the total run count `R` (heavily streamed with
 overlap). Both writer and reader memory are independent of document size;
 reader latency is `O(R · log_B n)` worst-case, logarithmic when `R_k = 1`.
 
-### 13.2 Encoder sketch
+### 14.2 Encoder sketch
 
 Per open JSON container, keep a frame with a **level stack**: level 0 holds
 current leaf entries; level `k > 0` holds pending `(sub_total, node_off)`
@@ -752,7 +808,7 @@ cascade one entry up. On close, unwind bottom-up; the last remaining entry's
 Arrays are textbook bulk-loaded B+trees, unsorted. Objects carry key bytes
 beside offsets at level 0; before each leaf flush, the buffer is sorted and
 any duplicate **within the buffer** is collapsed to its last occurrence
-(last-wins, §11.2) — duplicates against already-flushed runs need no
+(last-wins, §12.2) - duplicates against already-flushed runs need no
 special handling, since readers resolve them by flush order. After sorting,
 the leaf's smallest/largest
 `key_off`s become its fence and bubble up with `(sub_total, node_off)` -
@@ -765,7 +821,13 @@ Width selection happens once per node at flush: take the max offset, round
 up to the smallest `W ∈ {1,2,4,8}` that fits, encode `w` in the low 2 bits
 of the type code.
 
-### 13.3 Decoder sketch
+When a schema-aware caller emits a sum (§9), the encoder writes the
+sum header - `TinySum` for index ≤ 15, otherwise `Sum` plus a
+varuint index - directly into the byte stream immediately before the
+payload's bytes. The sum adds no level-stack entry of its own; the
+payload's encoding (scalar inline, container postorder) is unchanged.
+
+### 14.3 Decoder sketch
 
 Validate the header; read the trailer for `root_offset`. Dispatch on the
 type code at each cursor. The offset width is the low 2 bits of the node's
@@ -776,8 +838,15 @@ until the target falls inside a subtree, then index into the leaf.
 
 **Object key**: in a leaf, binary-search by dereferencing each `key_off`. In
 an internal node, recurse into every child whose `[key_off_lo, key_off_hi]`
-fence covers the key. A conforming file yields at most one match; a second
-match MUST cause rejection.
+fence covers the key, in flush-time order. Multiple matches across runs are
+permitted; the value from the most recently flushed run wins (§7.4).
+Equivalently, walk children in reverse flush order and return the first
+match.
+
+**Sum**: when the cursor lands on a `0xC0..0xCF` (TinySum) or `0xD0`
+(Sum) tag, recover the index (`code − 0xC0` or the trailing varuint) and
+re-dispatch at the next byte. Schema-blind decoders MAY skip the index and
+forward the payload directly to whatever consumes a kahon value.
 
 Full deserialization is an in-order traversal.
 

@@ -40,8 +40,8 @@
     "bytes_hex": "4B41484E 0200 14 71 01 0600 0700000000000000 4B41484E"
   },
   {
-    "id": "tolerated/sum-non-minimal-generic-form",
-    "description": "Sum index 5 wrapping integer 1, encoded with the generic 0xD0 form (D0 05 14) instead of TinySum (C5 14). Writers MUST use TinySum for indices 0..15 (§9, §12.2 minimal-encoding table); readers SHOULD accept the generic form (§12.1: 'Non-minimal sum index encoding — SHOULD accept').",
+    "id": "tolerated/ext-non-minimal-generic-form",
+    "description": "Extension ext_id 5 wrapping integer 1, encoded with the generic 0xD0 form (D0 05 14) instead of TinyExt (C5 14). Writers MUST use TinyExt for ids 0..15 (§9, §12.2 minimal-encoding table); readers SHOULD accept the generic form (§12.1: 'Non-minimal extension id encoding — SHOULD accept').",
     "spec_refs": ["§9", "§12.1", "§12.2"],
     "json_text": "1",
     "writer_compliant": false,
@@ -50,13 +50,13 @@
     "bytes_hex": "4B41484E 0200 D0 05 14 0600000000000000 4B41484E"
   },
   {
-    "id": "tolerated/sum-non-minimal-varuint-index",
-    "description": "Generic Sum with index 16 encoded as a 2-byte overlong varuint (90 00) instead of the minimal 1-byte form (10). The varuint is well-formed (terminator present, ≤ 10 bytes) but not minimal; per §6 readers SHOULD accept non-minimal varuints, while writers MUST emit the minimal form.",
+    "id": "tolerated/ext-non-minimal-varuint-id",
+    "description": "Generic Ext with ext_id 16 encoded as a 2-byte overlong varuint (90 00) instead of the minimal 1-byte form (10). The varuint is well-formed (terminator present, ≤ 10 bytes) but not minimal; per §6 readers SHOULD accept non-minimal varuints, while writers MUST emit the minimal form.",
     "spec_refs": ["§6", "§9", "§12.1", "§12.2"],
     "json_text": "1",
     "writer_compliant": false,
     "reader_should_accept": true,
-    "minimal_form_id": "sum/generic-index-16",
+    "minimal_form_id": "ext/generic-id-16",
     "bytes_hex": "4B41484E 0200 D0 9000 14 0600000000000000 4B41484E"
   }
 ]

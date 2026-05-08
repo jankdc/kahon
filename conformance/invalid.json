@@ -105,7 +105,7 @@
   },
   {
     "id": "decode/reserved-0x88",
-    "description": "Body byte 0x88 falls in the reserved gap 0x88..0xBF (between object-internal and TinySum).",
+    "description": "Body byte 0x88 falls in the reserved gap 0x88..0xBF (between object-internal and TinyExt).",
     "spec_refs": ["§4", "§12.1"],
     "must_reject": true,
     "reject_reason": "Unknown / reserved type code in gap 0x88..0xBF (§4).",
@@ -136,8 +136,8 @@
     "bytes_hex": "4B41484E 0200 41 88 88 70 01 07 0900000000000000 4B41484E"
   },
   {
-    "id": "decode/reserved-post-sum",
-    "description": "Body byte 0xD1 falls in the reserved range 0xD1..0xFF (above the Sum tag 0xD0). TinySum occupies 0xC0..0xCF and Sum is 0xD0; everything above is reserved (§4).",
+    "id": "decode/reserved-post-ext",
+    "description": "Body byte 0xD1 falls in the reserved range 0xD1..0xFF (above the Ext tag 0xD0). TinyExt occupies 0xC0..0xCF and Ext is 0xD0; everything above is reserved (§4).",
     "spec_refs": ["§4", "§9", "§12.1"],
     "must_reject": true,
     "reject_reason": "Unknown / reserved type code 0xD1 (§4: reserved bytes MUST NOT appear as a value type code; readers MUST reject per §12.1).",

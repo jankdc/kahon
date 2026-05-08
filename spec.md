@@ -17,7 +17,7 @@
 6. [VarInt Encoding](#6-varint-encoding)
 7. [Container Encoding](#7-container-encoding)
 8. [Container Tree Invariants](#8-container-tree-invariants)
-9. [Sum Encoding](#9-sum-encoding)
+9. [Extension Encoding](#9-extension-encoding)
 10. [Body and Postorder Layout](#10-body-and-postorder-layout)
 11. [Header and Trailer](#11-header-and-trailer)
 12. [Error Handling](#12-error-handling)
@@ -151,8 +151,8 @@ point at the type-code byte.
 | `0x74..0x77`   | Array internal   | `varuint total` + `varuint m` + `m × (uint64_le sub_total, uintW node_off)`          | -                              |
 | `0x80..0x83`   | Object leaf      | `varuint n` + `n × (uintW key_off, uintW val_off)` (width code `w = code − 0x80`)    | -                              |
 | `0x84..0x87`   | Object internal  | `varuint total` + `varuint m` + `m × (uint64_le sub_total, uintW key_off_lo, uintW key_off_hi, uintW node_off)` | -   |
-| `0xC0..0xCF`   | TinySum          | -; index `= code − 0xC0` (0..15); payload value follows immediately                  | `C3 14` (sum 3 of `1`)         |
-| `0xD0`         | Sum              | `varuint index` + payload value                                                      | `D0 10 14` (sum 16 of `1`)     |
+| `0xC0..0xCF`   | TinyExt          | -; ext_id `= code − 0xC0` (0..15); payload value follows immediately                 | `C3 14` (ext 3 of `1`)         |
+| `0xD0`         | Ext              | `varuint ext_id` + payload value                                                     | `D0 10 14` (ext 16 of `1`)     |
 
 The low 2 bits of every container type code encode an **offset width** `w`
 applied to all offsets in the node's payload:
@@ -516,8 +516,8 @@ rejection (advisory metadata, last-wins resolution) are noted inline:
 
 1. **Type consistency.** JSON arrays use `0x70..0x77` or `0x33`; JSON objects
    use `0x80..0x87` or `0x34`. Pointers via array-child or object-value slots
-   MAY land on any value tag, including a sum wrapper (`0xC0..0xD0`, §9);
-   the wrapped payload determines the JSON shape.
+   MAY land on any value tag, including an extension wrapper (`0xC0..0xD0`,
+   §9); the wrapped payload determines the JSON shape.
 2. **Internal node totals (advisory).** `total = Σ sub_total`, and each
    `sub_total` equals the referenced child's `n` (leaf) or `total`
    (internal). These counts are traversal metadata: writers MUST emit them
@@ -549,42 +549,54 @@ Invariant 3 (`m ≥ 2`) is a structural rule and remains MUST reject (§12.1).
 
 ---
 
-## 9. Sum Encoding
+## 9. Extension Encoding
 
-A **sum** is a tagged single-value wrapper for schema-aware tagged unions.
-The wire form is a type code, an optional varuint index, then exactly one
-payload value. Sums are transparent to JSON shape; schema-blind readers
-MAY drop the index and surface the payload directly.
+An **extension** is an opaque tagged single-value wrapper. The wire form
+is a type code, an optional varuint `ext_id`, then exactly one payload
+value. Extensions are transparent to JSON shape; schema-blind readers MAY
+drop the `ext_id` and surface the payload directly.
 
-Two encodings. For indices `0..15`, writers MUST use **TinySum**
-(`0xC0..0xCF`), with the index in the low nibble of the tag:
+The kahon spec assigns no semantics to any `ext_id` - the namespace
+belongs entirely to consumers (writer/reader pairs that share a schema or
+convention). Common uses include tagged unions, nominal types, and
+domain-specific markers (timestamps, decimals, UUIDs) that consumers want
+to recover post-decode without affecting JSON shape for blind readers.
+
+Two encodings. For ids `0..15`, writers MUST use **TinyExt**
+(`0xC0..0xCF`), with the id in the low nibble of the tag:
 
 ```
 +---------------+-----------------+
-| 0xC0 + index  | payload value   |
+| 0xC0 + ext_id | payload value   |
 +---------------+-----------------+
   1 byte           variable
 ```
 
-For indices `≥ 16`, writers MUST use the **generic** form:
+For ids `≥ 16`, writers MUST use the **generic** form:
 
 ```
 +------+---------+-----------------+
-| 0xD0 | index   | payload value   |
+| 0xD0 | ext_id  | payload value   |
 +------+---------+-----------------+
   1 byte  varuint   variable
 ```
 
-- **index**: sum discriminator, `varuint` (§6), encoded minimally.
-- **payload**: any kahon value at the next byte; no padding or separator.
-  Cases with no payload encode `Null` (`0x00`).
+- **ext_id**: extension discriminator, `varuint` (§6), encoded minimally.
+  Coordination of `ext_id` values is out-of-scope for this spec.
+- **payload**: any kahon value at the next byte; no padding, separator, or
+  length prefix. Cases with no payload encode `Null` (`0x00`).
 
-The sum header is written in postorder immediately before the payload's
-type-code byte: if the sum tag is at offset `V` and the index occupies
-`E` bytes (`E = 0` for TinySum), the payload's type-code byte is at
-`V + 1 + E`. Container slots referencing a sum point at the tag.
-Sums do not deduplicate; emitting the same payload under two indices
-writes the bytes twice.
+The extension header is written in postorder immediately before the
+payload's type-code byte: if the extension tag is at offset `V` and the
+id occupies `E` bytes (`E = 0` for TinyExt), the payload's type-code byte
+is at `V + 1 + E`. Container slots referencing an extension point at the
+tag. Extensions do not deduplicate; emitting the same payload under two
+ids writes the bytes twice.
+
+Because the payload is always a well-formed kahon value, a reader that
+doesn't recognize an `ext_id` can still structurally walk past it. There
+is no opaque-skip mode - readers that want to ignore an unknown extension
+simply decode the payload as a normal value.
 
 ---
 
@@ -663,7 +675,7 @@ magic mismatches or `root_offset` is out of range.
 | **Lookup**     | Non-minimal string encoding                  | SHOULD accept |
 | **Lookup**     | `n = 0` leaf instead of singleton            | SHOULD accept |
 | **Lookup**     | Non-minimal offset width                     | SHOULD accept (writer-only rule) |
-| **Lookup**     | Non-minimal sum index encoding               | SHOULD accept (writer-only rule) |
+| **Lookup**     | Non-minimal extension id encoding            | SHOULD accept (writer-only rule) |
 | **Lookup**     | Array index out of bounds                    | not-found or error (impl-defined) |
 | **Lookup**     | Key not found                                | not-found or error (impl-defined) |
 
@@ -698,7 +710,7 @@ Writers MUST also honor minimal encodings:
 |-----------------------------|------------------------------|---------|
 | integers `[-16, 31]`        | `TinyNegInt` / `TinyUInt`    | §5.2    |
 | string bytes `1..15`        | `TinyString`                 | §5.4    |
-| sum index `0..15`           | `TinySum`                    | §9      |
+| extension id `0..15`        | `TinyExt`                    | §9      |
 | zero-length array/object    | `EmptyArray` / `EmptyObject` | §7.0    |
 | container offset width      | smallest `W` that fits       | §7      |
 
@@ -821,10 +833,10 @@ Width selection happens once per node at flush: take the max offset, round
 up to the smallest `W ∈ {1,2,4,8}` that fits, encode `w` in the low 2 bits
 of the type code.
 
-When a schema-aware caller emits a sum (§9), the encoder writes the
-sum header - `TinySum` for index ≤ 15, otherwise `Sum` plus a
-varuint index - directly into the byte stream immediately before the
-payload's bytes. The sum adds no level-stack entry of its own; the
+When a consumer emits an extension (§9), the encoder writes the
+extension header - `TinyExt` for `ext_id ≤ 15`, otherwise `Ext` plus a
+varuint id - directly into the byte stream immediately before the
+payload's bytes. The extension adds no level-stack entry of its own; the
 payload's encoding (scalar inline, container postorder) is unchanged.
 
 ### 14.3 Decoder sketch
@@ -843,10 +855,10 @@ permitted; the value from the most recently flushed run wins (§7.4).
 Equivalently, walk children in reverse flush order and return the first
 match.
 
-**Sum**: when the cursor lands on a `0xC0..0xCF` (TinySum) or `0xD0`
-(Sum) tag, recover the index (`code − 0xC0` or the trailing varuint) and
-re-dispatch at the next byte. Schema-blind decoders MAY skip the index and
-forward the payload directly to whatever consumes a kahon value.
+**Extension**: when the cursor lands on a `0xC0..0xCF` (TinyExt) or `0xD0`
+(Ext) tag, recover the `ext_id` (`code − 0xC0` or the trailing varuint)
+and re-dispatch at the next byte. Schema-blind decoders MAY skip the id
+and forward the payload directly to whatever consumes a kahon value.
 
 Full deserialization is an in-order traversal.
 

@@ -7,6 +7,7 @@ See [spec.md](./spec.md) for the format specification.
 ## Implementations
 
 - [jankdc/kahon-rs](https://github.com/jankdc/kahon-rs) — Rust writer/encoder
+- [jankdc/kahon-js](https://github.com/jankdc/kahon-js) — JavaScript reader
 
 ## Conformance Vectors
 
